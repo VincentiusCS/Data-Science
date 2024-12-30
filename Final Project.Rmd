@@ -1,0 +1,418 @@
+---
+title: "Prediksi persentase Perokok di 34 Provinsi Indonesia pada Tahun 2025 dan Klasterisasi Berdasarkan Tingkat Keparahan"
+author: "Farras-Vincent"
+date: "2024-12-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(MLmetrics)
+library(forecast)
+
+# Load datasets
+file1 <- read.csv("data_perokok_15-17.csv")
+file2 <- read.csv("data_perokok_18-20.csv")
+file3 <- read.csv("data_perokok_21-23.csv")
+file4 <- read.csv("data_perokok_24.csv")
+
+# Merge datasets by "Provinsi"
+data <- file1 %>%
+  inner_join(file2, by = "Provinsi") %>%
+  inner_join(file3, by = "Provinsi") %>%
+  inner_join(file4, by = "Provinsi")
+
+# Jika nama kolom sudah berubah, hapus prefix 'X'
+names(data) <- gsub("^X", "", names(data))
+
+# Lanjutkan proses transform
+data[, 2:11] <- lapply(data[, 2:11], function(x) as.numeric(as.character(x)))
+
+# Hapus baris dengan Provinsi "Indonesia"
+data <- data %>%
+  filter(Provinsi != "INDONESIA")
+
+# View merged data
+data
+```
+
+```{r}
+# Check for missing values
+cat("Missing Values pada dataset awal \n")
+colSums(is.na(data))
+
+# Salin data asli ke variabel baru untuk proses pembersihan
+data_cleaned <- data
+
+# 1. Menggabungkan Papua Barat dan Papua Barat Daya
+papua_barat <- subset(data_cleaned, grepl("Papua Barat$", Provinsi, ignore.case = TRUE))
+papua_barat_daya <- subset(data_cleaned, grepl("Papua Barat Daya", Provinsi, ignore.case = TRUE))
+
+# Menghitung rata-rata untuk Papua Barat dan Papua Barat Daya
+papua_barat_mean <- colMeans(rbind(papua_barat[2:11], papua_barat_daya[2:11]), na.rm = TRUE)
+
+# 2. Menggabungkan Papua, Papua Selatan, Papua Tengah, dan Papua Pegunungan
+papua_selatan <- subset(data_cleaned, grepl("Papua Selatan", Provinsi, ignore.case = TRUE))
+papua_tengah <- subset(data_cleaned, grepl("Papua Tengah", Provinsi, ignore.case = TRUE))
+papua_pegunungan <- subset(data_cleaned, grepl("Papua Pegunungan", Provinsi, ignore.case = TRUE))
+papua <- subset(data_cleaned, grepl("Papua$", Provinsi, ignore.case = TRUE))
+
+# Menghitung rata-rata untuk semua wilayah Papua
+papua_mean <- colMeans(rbind(papua_selatan[2:11], papua_tengah[2:11], papua_pegunungan[2:11], papua[2:11]), na.rm = TRUE)
+
+# Mengupdate data Papua Barat dengan rata-rata
+data_cleaned[grepl("Papua Barat", data_cleaned$Provinsi,ignore.case = TRUE), 2:11] <- papua_barat_mean
+
+# Mengupdate data Papua dengan rata-rata
+data_cleaned[grepl("Papua$", data_cleaned$Provinsi, ignore.case = TRUE), 2:11] <- papua_mean
+
+# Menghapus baris Papua Barat Daya
+data_cleaned <- data_cleaned[!grepl("Papua Barat Daya", data_cleaned$Provinsi, ignore.case = TRUE), ]
+
+# Menghapus baris Papua Selatan, Papua Tengah, dan Papua Pegunungan
+data_cleaned <- data_cleaned %>%
+  filter(!grepl("Papua (Selatan|Tengah|Pegunungan)", Provinsi, ignore.case = TRUE))
+
+# Mengecek nilai yang hilang (missing values)
+cat("\nMissing Values pada dataset setelah cleaning data \n")
+colSums(is.na(data_cleaned))
+
+# Output hasil
+data_cleaned
+
+```
+
+tren rata rata nasional per tahun
+
+```{r}
+# Calculate yearly mean
+yearly_means <- colMeans(data_cleaned[, -1], na.rm = TRUE)
+
+# Visualize the trend
+years <- names(yearly_means)
+values <- as.numeric(yearly_means)
+
+ggplot(data = data.frame(Year = years, Value = values), aes(x = Year, y = Value, group = 1)) +
+  geom_line(color = "blue") +
+  geom_point(size = 2) +
+  labs(title = "Rata-rata Persentase Perokok di Indonesia (2015–2024)",
+       x = "Tahun", y = "Persentase (%)") +
+  theme_minimal()
+
+```
+
+Distribusi Persentase Merokok (Setiap Tahun)
+
+```{r}
+# Transform data to long format for ggplot
+library(tidyr)
+long_data <- pivot_longer(data_cleaned, cols = -Provinsi, names_to = "Year", values_to = "Value")
+
+# Plot the distribution for each year
+ggplot(long_data, aes(x = Value)) +
+  geom_histogram(binwidth = 2, fill = "skyblue", color = "black") +
+  facet_wrap(~ Year, scales = "free_y") +
+  labs(title = "Distribusi Persentase Merokok per Tahun",
+       x = "Persentase Merokok (%)", y = "Frekuensi") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Line plot for each province over the years
+ggplot(long_data, aes(x = Year, y = Value, group = Provinsi, color = Provinsi)) +
+  geom_line() +
+  labs(title = "Perubahan Persentase Merokok per Provinsi (2015–2024)",
+       x = "Tahun", y = "Persentase (%)") +
+  theme_minimal() +
+  theme(legend.text = element_text(size = 4), 
+      legend.title = element_text(size = 12, face = "bold"))
+
+```
+
+```{r}
+# Prepare data for heatmap
+library(reshape2)
+heatmap_data <- melt(data_cleaned, id.vars = "Provinsi", variable.name = "Year", value.name = "Value")
+
+# Create heatmap
+ggplot(heatmap_data, aes(x = Year, y = reorder(Provinsi, Value), fill = Value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "yellow", high = "red") +
+  labs(title = "Heatmap Persentase Merokok (2015–2024)",
+       x = "Tahun", y = "Provinsi", fill = "Persentase (%)") +
+  theme_minimal()
+
+```
+
+data preparation
+```{r}
+# Transformasikan data ke format time series
+
+data_ts <- data_cleaned %>%
+  select(-Provinsi) %>%
+  t() %>%
+  as.data.frame()
+colnames(data_ts) <- data_cleaned$Provinsi
+rownames(data_ts) <- as.character(2015:2024) 
+
+data_ts
+```
+
+
+
+```{r}
+# List untuk menyimpan hasil prediksi
+prediksi_2025 <- c()
+
+data_prediksi = data_ts
+
+# Loop untuk tiap provinsi
+for (prov in colnames(data_prediksi)) {
+  ts_data <- ts(data_prediksi[[prov]], start = 2015, frequency = 1)
+  model_arima <- auto.arima(ts_data)
+  pred <- forecast(model_arima, h = 1)$mean
+  prediksi_2025 <- c(prediksi_2025, as.numeric(pred))
+}
+
+# Gabungkan hasil prediksi ke data asli
+data_prediksi["2025", ] <- prediksi_2025
+data_prediksi <- as.data.frame(t(data_prediksi))
+data_prediksi <- cbind(Provinsi = rownames(data_prediksi), data_prediksi)
+rownames(data_prediksi) <- NULL
+
+data_prediksi
+```
+
+```{r}
+# Membuat data untuk 2024 dan 2025
+data_hasil_long <- data_prediksi %>%
+  select(Provinsi, `2024`, `2025`) %>%
+  pivot_longer(cols = c("2024", "2025"), names_to = "Year", values_to = "Persentase")
+
+# Membuat bar plot perbandingan 2024 dan 2025 dengan warna berbeda
+ggplot(data_hasil_long, aes(x = reorder(Provinsi, Persentase), y = Persentase, fill = Year)) +
+  geom_bar(stat = "identity", position = "dodge") +  # 'dodge' untuk meletakkan bar secara berdampingan
+  coord_flip() +
+  scale_fill_manual(values = c("2024" = "lightblue", "2025" = "lightcoral")) +  # Menetapkan warna untuk 2024 dan 2025
+  labs(title = "Perbandingan Persentase Merokok per Provinsi (2024 vs 2025)",
+       x = "Provinsi", y = "Persentase (%)", fill = "Tahun") +
+  theme_minimal()
+```
+
+```{r}
+# Data untuk klasterisasi (2015-2024)
+
+data_cluster = data_prediksi
+
+data_kmeans <- data_cluster[, as.character(2015:2024)]
+
+# Menentukan jumlah klaster (misalnya 3: rendah, sedang, tinggi)
+set.seed(123)  # Untuk reproducibility
+kmeans_model <- kmeans(data_kmeans, centers = 3)
+
+# Tambahkan label klaster ke data
+data_cluster$Cluster <- kmeans_model$cluster
+
+print(data_cluster)
+
+```
+
+```{r}
+ggplot(data_cluster, aes(x = reorder(Provinsi, `2025`), y = `2025`, fill = as.factor(Cluster))) +
+  geom_bar(stat = "identity", color = "black") +  # Membuat bar plot
+  coord_flip() +  # Membalik sumbu agar nama provinsi di sisi vertikal
+  labs(
+    title = "Persentase Tahun 2025 Berdasarkan Provinsi",
+    x = "Provinsi",
+    y = "Persentase (%)",
+    fill = "Cluster"
+  ) +
+  scale_fill_manual(values = c("red", "blue", "green")) +  # Warna klaster
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotasi teks sumbu X
+    legend.position = "top"
+  )
+ggplot(data_cluster, aes(x = Provinsi, y = `2025`, color = as.factor(Cluster))) +
+  geom_point(size = 4, alpha = 0.8) +  # Membuat scatter plot
+  labs(
+    title = "Diagram Clustering Berdasarkan Provinsi (Tahun 2025)",
+    x = "Provinsi",
+    y = "Persentase Tahun 2025 (%)",
+    color = "Cluster"
+  ) +
+  scale_color_manual(values = c("red", "blue", "green")) +  # Warna untuk setiap cluster
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),  # Rotasi nama provinsi
+    legend.position = "top"  # Letak legenda di atas
+  )
+```
+
+
+```{r}
+# Transformasikan data menjadi format long untuk visualisasi clustering
+data_cluster_long <- data_cluster %>%
+  pivot_longer(cols = as.character(2024:2025), names_to = "Year", values_to = "Persentase")
+data_cluster_long
+# Visualisasi plot clustering untuk tahun 2024 dan 2025
+ggplot(data_cluster_long, aes(x = Year, y = Persentase, color = as.factor(Cluster))) +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 3) +  # Scatter plot dengan jitter
+  scale_color_manual(values = c("red", "blue", "green"), name = "Cluster") +  # Warna klaster
+  labs(
+    title = "Plot Clustering untuk Tahun 2024 dan Prediksi 2025",
+    x = "Tahun",
+    y = "Persentase (%)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")  # Menampilkan legend di atas plot
+
+```
+
+
+```{r}
+# Transformasikan data menjadi format long
+data_cluster_long <- data_cluster %>%
+  pivot_longer(cols = as.character(2015:2025), names_to = "Year", values_to = "Persentase")
+
+# Visualisasi density plot
+ggplot(data_cluster_long, aes(x = Persentase, fill = as.factor(Cluster))) +
+  geom_density(alpha = 0.6) +  # Alpha mengatur transparansi
+  facet_wrap(~Year, scales = "free_y") +  # Satu density plot untuk setiap tahun
+  scale_fill_manual(values = c("red", "blue", "green"), name = "Cluster") +  # Warna khusus per klaster
+  labs(
+    title = "Density Plot Per Klaster (2015-2025)",
+    x = "Persentase (%)",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+
+# 1. Plot Distribusi Klaster (Boxplot)
+data_long <- data_cluster %>%
+  pivot_longer(cols = as.character(2015:2024), names_to = "Tahun", values_to = "Persentase")
+
+ggplot(data_long, aes(x = as.factor(Cluster), y = Persentase, fill = as.factor(Cluster))) +
+  geom_boxplot() +
+  labs(
+    title = "Distribusi Persentase Perokok Berdasarkan Klaster (2015-2024)",
+    x = "Klaster",
+    y = "Persentase Perokok",
+    fill = "Klaster"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+```{r}
+# Beri label pada prediksi 2025 sesuai klaster
+data_cluster <- data_cluster %>%
+  mutate(Prioritas = case_when(
+    Cluster == 1 ~ "Sedang",
+    Cluster == 2 ~ "Tinggi",
+    Cluster == 3 ~ "Rendah",
+  ))
+print(data_cluster)
+```
+Provinsi dengan tingkat prioritas tinggi
+```{r}
+# Filter data dengan prioritas tinggi
+prioritas_tinggi <- data_cluster %>%
+  filter(Prioritas == "Tinggi")
+print(prioritas_tinggi)
+
+ggplot(prioritas_tinggi, aes(x = Provinsi, y = `2025`)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(title = "Provinsi dengan Prioritas Tinggi", x = "Provinsi", y = "Nilai Tahun 2025") +
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+# Menambahkan label berdasarkan rata-rata tertinggi
+summary_cluster <- data_long %>%
+  group_by(Cluster) %>%
+  summarise(
+    Rata_Rata = mean(Persentase, na.rm = TRUE),
+    Median = median(Persentase, na.rm = TRUE),
+    Min = min(Persentase, na.rm = TRUE),
+    Max = max(Persentase, na.rm = TRUE),
+    Jumlah_Provinsi = n_distinct(Provinsi)
+  )
+
+# Mengurutkan klaster berdasarkan rata-rata dan memberikan label
+summary_cluster <- summary_cluster %>%
+  arrange(desc(Rata_Rata)) %>%
+  mutate(Cluster_Label = case_when(
+    row_number() == 1 ~ "Tinggi",    # Klaster dengan rata-rata tertinggi
+    row_number() == 2 ~ "Sedang",   # Klaster dengan rata-rata kedua
+    row_number() == 3 ~ "Rendah"    # Klaster dengan rata-rata terendah
+  ))
+
+# Gabungkan label ini kembali ke data asli
+data_long <- data_long %>%
+  left_join(summary_cluster[, c("Cluster", "Cluster_Label")], by = "Cluster")
+
+# Menampilkan hasil
+print(summary_cluster)
+```
+
+Evaluasi Prediksi
+```{r}
+# Menghitung MAE, MSE, dan RMSE
+
+
+# Misalkan kita memiliki data aktual untuk tahun 2024, atau menggunakan data yang lebih baru
+# Data aktual tahun 2024
+data_aktual_2024 <- data_prediksi$`2024`  
+
+# Prediksi untuk tahun 2025
+data_prediksi_2025 <- data_prediksi$`2025`
+
+# Hitung MAE, MSE, dan RMSE
+mae_value <- MAE(data_aktual_2024, data_prediksi_2025)
+mse_value <- MSE(data_aktual_2024, data_prediksi_2025)
+rmse_value <- RMSE(data_aktual_2024, data_prediksi_2025)
+
+cat("Evaluasi Prediksi untuk Tahun 2025\n")
+cat("MAE: ", mae_value, "\n")
+cat("MSE: ", mse_value, "\n")
+cat("RMSE: ", rmse_value, "\n")
+```
+
+evaluasi K Mean Clustering
+```{r}
+# Silhouette Score untuk KMeans (seberapa mirip dengan kluster lain)
+library(cluster)
+library(clusterSim)
+
+cat("Shilloutte Score: ")
+silhouette_score <- silhouette(kmeans_model$cluster, dist(data_kmeans))
+mean(silhouette_score[, 3])  # Menampilkan nilai rata-rata silhouette score
+cat("\n=> semakin mendekati 1, berarti pemisahan kluster semakin baik")
+
+cat("\n\nInertia Score: ")
+# Inertia (Within-cluster sum of squares) (jarak kluster)
+kmeans_model$tot.withinss  # Nilai inertia
+cat("\n=>semakin rendah nilai inertia, semakin baik pemisahan kluster ")
+
+db_index <- index.DB(data_kmeans, kmeans_model$cluster, centrotypes = "centroids")
+cat("\n\nDavies-Bouldin Index:", db_index$DB)
+cat("\n\n=>nilai DBI semakin mendekati 0, semakin baik pemisahan kluster ")
+```
